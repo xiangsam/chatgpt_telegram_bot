@@ -2,8 +2,7 @@ import config
 
 import tiktoken
 import openai
-
-
+import claude
 # setup openai
 openai.api_key = config.openai_api_key
 if config.openai_api_base is not None:
@@ -22,7 +21,7 @@ OPENAI_COMPLETION_OPTIONS = {
 
 class ChatGPT:
     def __init__(self, model="gpt-3.5-turbo"):
-        assert model in {"text-davinci-003", "gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}, f"Unknown model: {model}"
+        assert model in {"text-davinci-003", "claude-2-web", "gpt-3.5-turbo", "gpt-4"}, f"Unknown model: {model}"
         self.model = model
 
     async def send_message(self, message, dialog_messages=[], chat_mode="assistant"):
@@ -33,15 +32,24 @@ class ChatGPT:
         answer = None
         while answer is None:
             try:
-                if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}:
-                    messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
-                    r = await openai.ChatCompletion.acreate(
-                        model=self.model,
-                        messages=messages,
-                        **OPENAI_COMPLETION_OPTIONS
-                    )
+                if self.model in {"claude-2-web", "gpt-3.5-turbo", "gpt-4"}:
+                    if self.model == 'claude-2-web':
+                        messages = self._generate_prompt(message, dialog_messages, chat_mode)
+                        OPENAI_COMPLETION_OPTIONS['headers']={"Authorization": openai.api_key,'User-Agent': 'Apifox/1.0.0 (https://apifox.com)'}
+                        r = await claude.ChatCompletion.acreate(
+                            model=self.model,
+                            prompt=messages,
+                            **OPENAI_COMPLETION_OPTIONS
+                        )
+                    else:
+                        messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
+                        r = await openai.ChatCompletion.acreate(
+                            model=self.model,
+                            messages=messages,
+                            **OPENAI_COMPLETION_OPTIONS
+                        )
                     answer = r.choices[0].message["content"]
-                elif self.model == "text-davinci-003":
+                elif self.model in {"text-davinci-003"}:
                     prompt = self._generate_prompt(message, dialog_messages, chat_mode)
                     r = await openai.Completion.acreate(
                         engine=self.model,
@@ -73,15 +81,24 @@ class ChatGPT:
         answer = None
         while answer is None:
             try:
-                if self.model in {"gpt-3.5-turbo-16k", "gpt-3.5-turbo", "gpt-4"}:
-                    messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
-                    r_gen = await openai.ChatCompletion.acreate(
-                        model=self.model,
-                        messages=messages,
-                        stream=True,
-                        **OPENAI_COMPLETION_OPTIONS
-                    )
-
+                if self.model in {"claude-2-web","gpt-3.5-turbo", "gpt-4"}:
+                    if self.model == 'claude-2-web':
+                        messages = self._generate_prompt(message, dialog_messages, chat_mode)
+                        OPENAI_COMPLETION_OPTIONS['headers'] = {"Authorization": openai.api_key,'User-Agent': 'Apifox/1.0.0 (https://apifox.com)'}
+                        r_gen = await claude.ChatCompletion.acreate(
+                            model=self.model,
+                            prompt=messages,
+                            stream=True,
+                            **OPENAI_COMPLETION_OPTIONS
+                        )
+                    else:
+                        messages = self._generate_prompt_messages(message, dialog_messages, chat_mode)
+                        r_gen = await openai.ChatCompletion.acreate(
+                            model=self.model,
+                            messages=messages,
+                            stream=True,
+                            **OPENAI_COMPLETION_OPTIONS
+                        )
                     answer = ""
                     async for r_item in r_gen:
                         delta = r_item.choices[0].delta
@@ -90,10 +107,11 @@ class ChatGPT:
                             n_input_tokens, n_output_tokens = self._count_tokens_from_messages(messages, answer, model=self.model)
                             n_first_dialog_messages_removed = n_dialog_messages_before - len(dialog_messages)
                             yield "not_finished", answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
-                elif self.model == "text-davinci-003":
+                elif self.model in {"text-davinci-003"}:
                     prompt = self._generate_prompt(message, dialog_messages, chat_mode)
                     r_gen = await openai.Completion.acreate(
                         engine=self.model,
+                        #model=self.model,
                         prompt=prompt,
                         stream=True,
                         **OPENAI_COMPLETION_OPTIONS
@@ -150,9 +168,16 @@ class ChatGPT:
         return answer
 
     def _count_tokens_from_messages(self, messages, answer, model="gpt-3.5-turbo"):
-        encoding = tiktoken.encoding_for_model(model)
+        if model == 'claude-2-web':
+            encoding = tiktoken.get_encoding('cl100k_base')
+            n_input_tokens = len(encoding.encode(messages)) + 1
+            n_output_tokens = len(encoding.encode(answer))
 
-        if model == "gpt-3.5-turbo-16k":
+            return n_input_tokens, n_output_tokens
+        else:
+            encoding = tiktoken.encoding_for_model(model)
+
+        if model == "claude-2-web":
             tokens_per_message = 4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
             tokens_per_name = -1  # if there's a name, the role is omitted
         elif model == "gpt-3.5-turbo":
@@ -203,3 +228,4 @@ async def generate_images(prompt, n_images=4, size="512x512"):
 async def is_content_acceptable(prompt):
     r = await openai.Moderation.acreate(input=prompt)
     return not all(r.results[0].categories.values())
+
